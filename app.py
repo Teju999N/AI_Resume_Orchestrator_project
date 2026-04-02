@@ -8,13 +8,12 @@ from google import genai
 GEMINI_API_KEY = st.secrets["GEMINI_API_KEY"]
 N8N_WEBHOOK_URL = st.secrets["N8N_WEBHOOK_URL"]
 
-# Gemini client
 client = genai.Client(api_key=GEMINI_API_KEY)
 
-st.title("📄 AI Document Orchestrator")
+st.title("📄 AI Resume Screening Orchestrator")
 
-# ---------------- FILE UPLOAD ---------------- #
-uploaded_file = st.file_uploader("Upload PDF or TXT", type=["pdf", "txt"])
+# ---------- FILE UPLOAD ---------- #
+uploaded_file = st.file_uploader("Upload Resume", type=["pdf", "txt"])
 
 def extract_text(file):
     if file.type == "application/pdf":
@@ -26,34 +25,40 @@ def extract_text(file):
     else:
         return file.read().decode("utf-8")
 
-# ---------------- USER QUERY ---------------- #
-query = st.text_input("Ask your question about the document")
+# ---------- JOB DESCRIPTION ---------- #
+job_desc = st.text_area("Ask me a question")
 
-# ---------------- GEMINI EXTRACTION ---------------- #
-if uploaded_file and query:
-    text = extract_text(uploaded_file)
+if uploaded_file and job_desc:
+    resume_text = extract_text(uploaded_file)
 
-    st.subheader("📊 Extracting Structured Data...")
+    st.subheader("🔍 Analyzing Resume...")
 
     prompt = f"""
-    You are an AI data extractor.
+    You are an AI resume analyzer.
 
-    Given the document and user query, extract 5-8 most relevant key-value pairs.
+    Analyze the resume according to user question.
 
-    Return STRICT JSON ONLY.
+    Resume:
+    {resume_text[:6000]}
 
-    Document:
-    {text[:8000]}
+    Job Description:
+    {job_desc}
 
-    Question:
-    {query}
+    Return STRICT JSON:
 
-    Output format:
     {{
-      "key1": "value1",
-      "key2": "value2",
-      "risk_level": "Low/Medium/High"
+      "candidate_name": "",
+      "match_score": 0,
+      "matched_skills": [],
+      "missing_skills": [],
+      "experience_relevance": "",
+      "shortlist_category": "",
+      "reason": ""
     }}
+
+    Rules:
+    - score >= 70 → Shortlisted
+    - score < 70 → Not Shortlisted
     """
 
     response = client.models.generate_content(
@@ -62,41 +67,50 @@ if uploaded_file and query:
     )
 
     try:
-        extracted_json = json.loads(response.text)
-        st.success("✅ Structured Data Extracted")
-        st.json(extracted_json)
+        data = json.loads(response.text)
+        st.success("✅ Analysis Complete")
+
+        st.json(data)
+
+        # ---------- SHORTLIST DISPLAY ---------- #
+        score = int(data.get("match_score", 0))
+
+        st.subheader("📊 Shortlisting Result")
+
+        if score >= 70:
+            st.success("Shortlisted")
+        else:
+            st.error("Not Shortlisted")
 
     except:
         st.error("❌ JSON parsing failed")
-        extracted_json = {"error": response.text}
+        data = {"error": response.text}
 
-    # ---------------- EMAIL SECTION ---------------- #
-    st.subheader("📧 Email Automation")
+    # ---------- EMAIL SECTION ---------- #
+    st.subheader("📧 Notify Recruiter")
 
-    email = st.text_input("Recipient Email ID")
+    recruiter_email = st.text_input("Recruiter Email")
 
-    if st.button("Send Alert Mail"):
+    if st.button("Send Decision Email"):
 
         payload = {
-            "document_text": text[:5000],
-            "question": query,
-            "extracted_data": extracted_json,
-            "email": email
+            "analysis": data,
+            "email": recruiter_email
         }
 
         res = requests.post(N8N_WEBHOOK_URL, json=payload)
 
         if res.status_code == 200:
-            data = res.json()
+            result = res.json()
 
-            st.subheader("🧠 Final Analytical Answer")
-            st.write(data.get("final_answer", "No response"))
+            st.subheader("🧠 Final Summary")
+            st.write(result.get("final_answer"))
 
-            st.subheader("✉ Generated Email Body")
-            st.write(data.get("email_body", "No email sent"))
+            st.subheader("✉ Email Content")
+            st.write(result.get("email_body"))
 
-            st.subheader("📢 Email Status")
-            st.success(data.get("status", "Unknown"))
+            st.subheader("📢 Status")
+            st.success(result.get("status"))
 
         else:
-            st.error("❌ Failed to connect to n8n")
+            st.error("❌ n8n connection failed")
